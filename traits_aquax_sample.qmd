@@ -59,5 +59,96 @@ plot(r$Current_NR)
 plot(r$RCP85_2100)
 ```
 
+```{r}
+# Assign historical, future, (x-y will be pixel id), and change between historical and future 
+finalemmean_test <- FINALEMMEAN %>% 
+  mutate(aphiaid = test_spp$aphiaid) %>% 
+  select(x, y, aphiaid, Current, RCP85_2050, cutoff) %>% 
+  mutate(historical = case_when(Current < cutoff ~ 0,
+                                TRUE ~ 1),
+         future = case_when(RCP85_2050 < cutoff ~ 0,
+                             TRUE ~ 1)) %>%
+  # historical column plus 2 * future gives 0 = absence, 1 = extinction, 2 = invasion, 3 = presence
+  mutate(pxl_change = historical + 2 * future)
+
+```
+
+```{r}
+r_pa <- rast(finalemmean_test)
+plot(r_pa$historical)
+plot(r_pa$future)
+plot(r_pa$pxl_change)
+
+```
+```{r}
+# Invasion and extinction 
+finalemmean_inv_ext <- finalemmean_test %>%
+  mutate(inv_ext = case_when(historical == 0 & future == 0 ~ 0, #absence
+                             historical == 1 & future == 1 ~ 1, #presence
+                             historical == 0 & future == 1 ~ 2, #invasion
+                             historical == 1 & future == 0 ~ 3,)) #extinction
+```
+
+# Test a bigger subsample
+
+```{r}
+set.seed(123)
+test_spp_30 <- slice_sample(df, n = 30)
+files_30 <- test_spp_30$f
+aphiaid_30 <- test_spp_30$aphiaid
+#load(test_spp_30$f)
+
+```
+
+```{r}
+test_1 <- test_spp_30 %>% 
+  filter(aphiaid == aphiaid_30[18]) 
+
+load(test_1$f)
+```
+
+
+```{r}
+extract_change <- function(id, df) {
+  spp_filter <- df %>% 
+    filter(aphiaid == id) 
+  
+  load(spp_filter$f)
+  
+  spp_change <- FINALEMMEAN %>% 
+  mutate(aphiaid = id) %>% 
+  select(x, y, aphiaid, Current, RCP85_2050, cutoff) %>% 
+  mutate(historical = case_when(Current < cutoff ~ 0,
+                                TRUE ~ 1),
+         future = case_when(RCP85_2050 < cutoff ~ 0,
+                             TRUE ~ 1)) %>%
+  # historical column plus 2 * future gives 0 = absence, 1 = extinction, 2 = invasion, 3 = presence
+  mutate(pxl_change = historical + 2 * future)
+  
+  r_spp_change <- rast(spp_change)
+  
+  return(r_spp_change)
+}
+```
+
+```{r}
+change_rast <- lapply(aphiaid_30, FUN = extract_change, df = test_spp_30)
+```
+
+```{r}
+x <- change_rast[[8]]
+```
+
+```{r}
+plot(x$pxl_change)
+```
+
+## Next, extract the rasters into a dataframe in order to count 
+Or stick to raster math (could mask everything but 3s and count those up (the number of species in each cell that remain the same); then count up historical = 1 (historical species) and then could up future = 1 (future species) --> use these to calculate SSI (2 * same / historical + future) 
+- challenge - rasters aren't the same size, but cells overlap 
+
+```{r}
+raster_x_df <- data.frame(values(x))
+```
 
 
