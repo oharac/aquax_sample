@@ -62,8 +62,9 @@ plot(r$RCP85_2100)
 ```{r}
 # Assign historical, future, (x-y will be pixel id), and change between historical and future 
 finalemmean_test <- FINALEMMEAN %>% 
-  mutate(aphiaid = test_spp$aphiaid) %>% 
-  select(x, y, aphiaid, Current, RCP85_2050, cutoff) %>% 
+  mutate(aphiaid = test_spp$aphiaid,
+         xyid = paste(x, y, sep = "_")) %>% 
+  select(x, y, xyid, aphiaid, Current, RCP85_2050, cutoff) %>% 
   mutate(historical = case_when(Current < cutoff ~ 0,
                                 TRUE ~ 1),
          future = case_when(RCP85_2050 < cutoff ~ 0,
@@ -123,11 +124,14 @@ extract_change <- function(id, df) {
          future = case_when(RCP85_2050 < cutoff ~ 0,
                              TRUE ~ 1)) %>%
   # historical column plus 2 * future gives 0 = absence, 1 = extinction, 2 = invasion, 3 = presence
-  mutate(pxl_change = historical + 2 * future)
+  mutate(pxl_change = historical + 2 * future,
+         remain = case_when(pxl_change == 3 ~ 1,
+                            TRUE ~ 0))
   
   r_spp_change <- rast(spp_change)
   
-  return(r_spp_change)
+  # return just the pixel change field
+  return(r_spp_change[["pxl_change"]])
 }
 ```
 
@@ -137,18 +141,81 @@ change_rast <- lapply(aphiaid_30, FUN = extract_change, df = test_spp_30)
 
 ```{r}
 x <- change_rast[[8]]
+y <- change_rast[[11]]
 ```
 
 ```{r}
 plot(x$pxl_change)
+plot(y$pxl_change)
 ```
+
+```{r}
+freq(x$pxl_change)
+freq(x$pxl_change, value = 3)
+```
+
 
 ## Next, extract the rasters into a dataframe in order to count 
 Or stick to raster math (could mask everything but 3s and count those up (the number of species in each cell that remain the same); then count up historical = 1 (historical species) and then could up future = 1 (future species) --> use these to calculate SSI (2 * same / historical + future) 
 - challenge - rasters aren't the same size, but cells overlap 
+- creating dataframe might create same number of rows
 
 ```{r}
-raster_x_df <- data.frame(values(x))
+raster_x_df <- data.frame(values(x)) #%>% 
+  #mutate(pixel_id = row_number())
+```
+
+```{r}
+raster_y_df <- data.frame(values(y)) #%>% 
+  #mutate(pixel_id = row_number())
+```
+
+```{r}
+# The rasters are not the same extent (different cropping based on species), so I need to union them to find the largest area and then pad the individual rasters
+change_collection <- sprc(change_rast)
+max_extent <- ext(change_collection)
+```
+
+```{r}
+align_list <- function(r) {
+  extend(r, max_extent)
+}
+```
+
+```{r}
+change_rast_aligned <- lapply(change_rast, align_list)
+```
+
+```{r}
+change_stack <- rast(change_rast_aligned)
+```
+
+```{r}
+# Count the number of "3s" - shared species
+# adding row name? 3 works, since it's unique, but otherwise I ned to filter these layers before the stack 
+spp_same_count <- sum(change_stack == 3, na.rm = TRUE)
+spp_ext <- sum(change_stack == 1, na.rm = TRUE)
+spp_inv <- sum(change_stack == 2, na.rm = TRUE)
+```
+
+```{r}
+spp_ssi <- (2*spp_same_count)/((2*spp_same_count) + spp_ext + spp_inv)
+```
+
+```{r}
+#Species richness - historic
+plot(spp_same_count + spp_ext)
+```
+
+```{r}
+#Species richness - future
+plot(spp_same_count + spp_inv)
+```
+
+
+```{r}
+# Species SSI
+plot(spp_ssi)
 ```
 
 
