@@ -218,4 +218,35 @@ plot(spp_same_count + spp_inv)
 plot(spp_ssi)
 ```
 
+## Try running in parallel with app function 
+
+```{r}
+count_change <- function(x){
+  sum(x == 3, na.rm = TRUE)
+}
+```
+
+```{r}
+system.time({
+  spp_same_count_pl <- app(change_stack, count_change, cores = 5)
+  })
+
+```
+
+```{r}
+plot(spp_same_count_pl)
+```
+
+
+
+```{r}
+library(parallel)
+```
+
+#doesn't work with SpatRasters
+```{r}
+system.time({
+  out_list <- parallel::mclapply(aphiaid_30, FUN = extract_change, df = test_spp_30, mc.cores = 3)
+})
+```
 
