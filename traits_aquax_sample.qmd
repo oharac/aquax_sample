@@ -249,6 +249,7 @@ aphiaid_df <- df$aphiaid
 ```
 
 ```{r}
+# Took about 6 minutes
 system.time({
   out_list <- parallel::mclapply(aphiaid_df, FUN = extract_change, df = df, mc.cores = 10)
 })
@@ -270,10 +271,236 @@ spp_r <- function(spp, col){
 ```
 
 ```{r}
+# Get rasters of pxl_change (took 20 min)
 out_list_r <- lapply(out_list, spp_r, col = "pxl_change")
 ```
 
 ```{r}
 plot(out_list_r[[1]])
+```
+
+```{r}
+# The rasters are not the same extent (different cropping based on species), so I need to union them to find the largest area and then pad the individual rasters
+change_collection <- sprc(out_list_r)
+max_extent <- ext(change_collection)
+```
+
+```{r}
+align_list <- function(r) {
+  extend(r, max_extent)
+}
+```
+
+```{r}
+change_rast_aligned <- lapply(out_list_r, align_list)
+```
+
+```{r}
+change_stack <- rast(change_rast_aligned)
+```
+
+```{r}
+# Count the number of "3s" - shared species
+# adding row name? 3 works, since it's unique, but otherwise I need to filter these layers before the stack 
+spp_same_count <- sum(change_stack == 3, na.rm = TRUE)
+spp_ext <- sum(change_stack == 1, na.rm = TRUE)
+spp_inv <- sum(change_stack == 2, na.rm = TRUE)
+```
+
+```{r}
+spp_ssi <- (2*spp_same_count)/((2*spp_same_count) + spp_ext + spp_inv)
+```
+
+```{r}
+writeRaster(spp_ext, 
+            filename = "/home/shares/usgs-cap-rangeshifts/data_aquax/outputs/spp_ext_031626.tif")
+writeRaster(spp_inv, 
+            filename = "/home/shares/usgs-cap-rangeshifts/data_aquax/outputs/spp_inv_031626.tif")
+```
+
+```{r}
+writeRaster(spp_ssi, 
+            filename = "/home/shares/usgs-cap-rangeshifts/data_aquax/outputs/spp_ssi_03.16.26.tif")
+```
+
+```{r}
+plot(spp_ssi)
+```
+
+```{r}
+spp_ssi_df <- as.data.frame(spp_ssi, xy = TRUE)
+spp_h_df <- as.data.frame(spp_ext + spp_same_count, xy = TRUE)
+spp_f_df <- as.data.frame(spp_inv + spp_same_count, xy = TRUE)
+```
+
+```{r}
+ggplot() +
+  geom_raster(data = spp_h_df, aes(x = x, y = y, fill = sum)) +
+  scale_fill_viridis_c(limits = c(0,200), direction = -1) +
+  labs(title = "AquaX Subsample: 564 species historic SR", 
+       fill = "SR")
+```
+
+```{r}
+ggplot() +
+  geom_raster(data = spp_f_df, aes(x = x, y = y, fill = sum)) +
+  scale_fill_viridis_c(limits = c(0,200), direction = -1) +
+  labs(title = "AquaX Subsample: 564 species future species count", 
+       fill = "count")
+```
+
+
+```{r}
+ggplot() +
+  geom_raster(data = spp_ssi_df, aes(x = x, y = y, fill = sum)) +
+  scale_fill_viridis_c(limits = c(0,1), direction = -1) +
+  labs(title = "AquaX Subsample: 564 species SSI", 
+       fill = "SSI")
+```
+
+## Test out parallel rasters
+
+```{r}
+set.seed(123)
+test_spp_30 <- slice_sample(df, n = 10)
+files_30 <- test_spp_30$f
+aphiaid_30 <- test_spp_30$aphiaid
+#load(test_spp_30$f)
+
+```
+
+```{r}
+out_list_sample <- out_list[1:10]
+```
+
+
+```{r}
+# Function to rasterize extract_change return and return only pxl_change
+spp_r_pll <- function(spp, col){
+  r_spp_change <- rast(spp)
+  r_spp_single <- r_spp_change[[col]]
+  return(wrap(r_spp_single))
+}
+```
+
+```{r}
+# Get rasters of pxl_change (rasters are wrapped)
+out_list_r_pll <- parallel::mclapply(out_list_sample, spp_r_pll, col = "pxl_change", mc.cores = 5)
+```
+
+```{r}
+# Unwrap rasters
+final_rasters <- lapply(out_list_r_pll, unwrap)
+```
+
+```{r}
+plot(final_rasters[[1]])
+```
+
+## Test out the function with raster back in and parallel 
+
+```{r}
+extract_change <- function(id, df, col) {
+  spp_filter <- df %>% 
+    filter(aphiaid == id) 
+  
+  load(spp_filter$f)
+  
+  spp_change <- FINALEMMEAN %>% 
+  mutate(aphiaid = id) %>% 
+  select(x, y, aphiaid, Current, RCP85_2050, cutoff) %>% 
+  mutate(historical = case_when(Current < cutoff ~ 0,
+                                TRUE ~ 1),
+         future = case_when(RCP85_2050 < cutoff ~ 0,
+                             TRUE ~ 1)) %>%
+  # historical column plus 2 * future gives 0 = absence, 1 = extinction, 2 = invasion, 3 = presence
+  mutate(pxl_change = historical + 2 * future)
+  
+  r_spp_change <- rast(spp_change)
+  
+  # return just the pixel change field
+  r_spp_single <- r_spp_change[[col]]
+  return(wrap(r_spp_single))
+}
+```
+
+```{r}
+# Took 5 mins.
+system.time({
+  out_list_r_pll <- parallel::mclapply(aphiaid_df, FUN = extract_change, df = df,
+                                       col = "pxl_change",
+                                       mc.cores = 10)
+})
+```
+
+```{r}
+# Unwrap rasters (30 seconds)
+system.time({
+  final_rasters_pll <- lapply(out_list_r_pll, unwrap)
+  })
+```
+
+```{r}
+# The rasters are not the same extent (different cropping based on species), so I need to union them to find the largest area and then pad the individual rasters
+# LAA - could we just use extent of globe for the full analysis and skip these steps? (these steps take a handful of minutes)
+change_collection <- sprc(final_rasters_pll)
+max_extent <- ext(change_collection)
+```
+
+```{r}
+align_list <- function(r) {
+  extend(r, max_extent)
+}
+```
+
+```{r}
+change_rast_aligned <- lapply(final_rasters_pll, align_list)
+```
+
+```{r}
+change_stack <- rast(change_rast_aligned)
+```
+
+## Try running sum function in parellel with terra's app
+
+## Try running in parallel with app function 
+
+```{r}
+count_change <- function(x, n){
+  sum(x == n, na.rm = TRUE)
+}
+```
+
+```{r}
+# Took 8 min
+system.time({
+  spp_same_count_pl <- app(change_stack, count_change, n = 3, cores = 10)
+  })
+```
+
+```{r}
+plot(spp_same_count_pl)
+```
+
+```{r}
+# Took 8 min
+system.time({
+  spp_inv_pl <- app(change_stack, count_change, n = 2, cores = 10)
+  })
+```
+
+```{r}
+# Took 8 min
+system.time({
+  spp_ext_pl <- app(change_stack, count_change, n = 1, cores = 10)
+  })
+```
+
+```{r}
+spp_ssi_pl <- (2*spp_same_count_pl)/((2*spp_same_count_pl) + spp_ext_pl + spp_inv_pl)
+```
+
+```{r}
+plot(spp_ssi_pl)
 ```
 
