@@ -1,0 +1,146 @@
+---
+title: "Traits and AquaX Sample - cont."
+format: 
+  html:
+    toc: true
+    number-sections: true
+    embed-resources: true
+execute:
+    message: false
+    warning: false
+---
+
+```{r}
+library(tidyverse)
+library(terra)
+```
+
+```{r}
+# Not on server
+load('data/META_02122025.Rdata')
+# Load functional entitity data from O'hara et al. 2024
+fe_spp <- read_csv('data/2024_ohara_fe_species.csv')
+# Load sample data
+aquax_sample <- read_csv('data/2026_OHARA_TST_MORPHO/sample_for_aquaX.csv') 
+```
+
+```{r}
+META_clean <- META %>% 
+  dplyr::select(SPID, GROUP, AphiaID, ScientificName) %>% 
+  mutate(species = tolower(ScientificName))
+
+# 101,361 spp of 206,864 have quick matches (still get 376 of 373 fe)
+xwlk <- inner_join(META_clean, fe_spp)
+```
+
+```{r}
+# All spp have fe matchs --> 163 fe
+aquax_sample_xwlk <- inner_join(aquax_sample, fe_spp)
+```
+
+## Build species information
+
+Associate SDM files with the metadata for the 564 sampled species
+```{r}
+spp_fs <- list.files('/home/shares/usgs-cap-rangeshifts/data_aquax/2026_OHARA_TST_MORPHO/SDM',
+                     full.names = TRUE)
+
+df <- data.frame(f = spp_fs) %>%
+    mutate(fsize = file.size(f),
+           aphiaid = str_extract(basename(f), '[0-9]+') %>% as.integer()) %>%
+    # Join in the trait crosswalk
+    left_join(aquax_sample_xwlk, by = c('aphiaid' = 'AphiaID'))
+```
+
+## Inspect a test species
+
+Identify the structure of the SDM .Rdata for a single species
+
+```{r}
+df_5 <- df %>% 
+  # Filter for one fe_id
+  filter(fe_id ==5)
+```
+
+```{r}
+extract_change <- function(id, df) {
+  spp_filter <- df %>% 
+    filter(aphiaid == id) 
+  
+  load(spp_filter$f)
+  
+  spp_change <- FINALEMMEAN %>% 
+  mutate(aphiaid = id) %>% 
+  select(x, y, aphiaid, Current, RCP85_2050, cutoff) %>% 
+  mutate(historical = case_when(Current < cutoff ~ 0,
+                                TRUE ~ 1),
+         future = case_when(RCP85_2050 < cutoff ~ 0,
+                             TRUE ~ 1)) %>%
+  # historical column plus 2 * future gives 0 = absence, 1 = extinction, 2 = invasion, 3 = presence
+  mutate(pxl_change = historical + 2 * future)
+  
+  r_spp_change <- rast(spp_change)
+  
+  # return just the pixel change field
+  #r_spp_single <- r_spp_change[[col]]
+  #return(wrap(r_spp_single))
+  
+  # return all fields
+  return(wrap(r_spp_change))
+}
+```
+
+```{r}
+aphiaid_df_5 <- df_5$aphiaid
+```
+
+```{r}
+# Took 5 mins.
+system.time({
+  out_list_r_pll <- parallel::mclapply(aphiaid_df_5, FUN = extract_change, df = df_5,
+                                       #col = "historical",
+                                       mc.cores = 1)
+})
+```
+
+```{r}
+# Unwrap rasters (30 seconds)
+system.time({
+  final_rasters_pll <- lapply(out_list_r_pll, unwrap)
+  })
+```
+
+```{r}
+# The rasters are not the same extent (different cropping based on species), so I need to union them to find the largest area and then pad the individual rasters
+# LAA - could we just use extent of globe for the full analysis and skip these steps? (these steps take a handful of minutes)
+change_collection <- sprc(final_rasters_pll)
+max_extent <- ext(change_collection)
+```
+
+```{r}
+align_list <- function(r) {
+  extend(r, max_extent)
+}
+```
+
+```{r}
+change_rast_aligned <- lapply(final_rasters_pll, align_list)
+```
+
+```{r}
+change_stack <- rast(change_rast_aligned)
+```
+
+```{r}
+# Mosaic uses spcc
+# For each pixel, if there is at least one species present with that trait (1), then a 1 will be captured.
+change_stack_max <- mosaic(change_collection, fun = "max")
+```
+
+```{r}
+# Plottign fe_id == 5 
+plot(change_stack_max[["historical"]])
+plot(change_stack_max[["future"]])
+plot(change_stack_max[["historical"]] + 2 * change_stack_max[["future"]])
+```
+
