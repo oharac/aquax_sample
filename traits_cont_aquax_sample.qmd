@@ -35,7 +35,8 @@ xwlk <- inner_join(META_clean, fe_spp)
 
 ```{r}
 # All spp have fe matchs --> 163 fe
-aquax_sample_xwlk <- inner_join(aquax_sample, fe_spp)
+aquax_sample_xwlk <- inner_join(aquax_sample, fe_spp) %>% 
+  rename(aphiaid = AphiaID)
 ```
 
 ## Build species information
@@ -142,5 +143,86 @@ change_stack_max <- mosaic(change_collection, fun = "max")
 plot(change_stack_max[["historical"]])
 plot(change_stack_max[["future"]])
 plot(change_stack_max[["historical"]] + 2 * change_stack_max[["future"]])
+```
+
+## Work on applying to full sample
+
+```{r}
+xwlk_simple <- aquax_sample_xwlk %>% 
+  dplyr::select(aphiaid,fe_id)
+```
+
+```{r}
+set.seed(123)
+test_spp <- slice_sample(df, n = 30)
+```
+
+```{r}
+trait_change <- function(id, df) {
+  spp_filter <- df %>% 
+    filter(aphiaid == id) 
+  
+  load(spp_filter$f)
+  
+  spp_change <- FINALEMMEAN %>% 
+  mutate(aphiaid = id) %>% 
+  select(x, y, aphiaid, Current, RCP85_2050, cutoff) %>% 
+  mutate(historical = case_when(Current < cutoff ~ 0,
+                                TRUE ~ 1),
+         future = case_when(RCP85_2050 < cutoff ~ 0,
+                             TRUE ~ 1)) %>%
+  # historical column plus 2 * future gives 0 = absence, 1 = extinction, 2 = invasion, 3 = presence
+  mutate(pxl_change = historical + 2 * future)
+  
+  spp_change_fe_id <- inner_join(spp_change, xwlk_simple)
+  
+  r_spp_change <- rast(spp_change_fe_id)
+  
+  # return all fields
+  return(wrap(r_spp_change))
+}
+```
+
+## Loop through the functional entity codes, apply function, and mosaic into a single layer for each FE.
+Can still parallelize the function within the loop
+
+```{r}
+# Identify fe_id groups in sample
+fe_ids <- unique(test_spp$fe_id)
+
+# Create empty list for results 
+all_results <- list()
+```
+
+```{r}
+for (id in fe_ids) {
+  # Filter for functional entity 
+  df_sub <- test_spp %>% filter(fe_id == id)
+  
+  aphiaid_sub <- unique(df_sub$aphiaid)
+  
+  # Now iterate over the aphiaids (species) using trait_change function
+    wrapped_r <- parallel::mclapply(aphiaid_sub, FUN = trait_change, df = df_sub, 
+                                    mc.cores = 3)
+    
+    # Unwrap rasters (they're wrapped for parallelization)
+    spp_r <- lapply(wrapped_r, unwrap)
+    
+    # Create sprc and mosaic to create one raster layer of the trait
+    change_collection <- sprc(spp_r)
+    # Using "max" to assign the pixel 1 if any pixel in stack has 1
+    change_stack_max <- mosaic(change_collection, fun = "max")
+    
+    # Return results
+    all_results[[as.character(id)]] <- change_stack_max
+}
+```
+
+```{r}
+all_results_137 <- all_results[[2]]
+```
+
+```{r}
+plot(all_results_137$pxl_change)
 ```
 
