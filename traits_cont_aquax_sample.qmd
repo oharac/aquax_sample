@@ -50,7 +50,7 @@ df_spp <- data.frame(f = spp_fs) %>%
     mutate(fsize = file.size(f),
            aphiaid = str_extract(basename(f), '[0-9]+') %>% as.integer()) %>%
     # Join in the trait crosswalk
-    left_join(aquax_sample_xwlk, by = c('aphiaid' = 'AphiaID'))
+    left_join(aquax_sample_xwlk)
 ```
 
 ## Work on applying to full sample
@@ -91,7 +91,7 @@ trait_change <- function(id, df) {
 }
 ```
 
-## Loop through the functional entity codes, apply function, and mosaic into a single layer for each FE.
+## Loop through the functional entity codes, apply function, mosaic into a single layer for each FE, and calculate the pixel change by trait.
 Can still parallelize the function within the loop
 
 ```{r}
@@ -103,6 +103,8 @@ all_results <- list()
 ```
 
 ```{r}
+# Took 50 minutes using 10 cores
+system.time({
 for (id in fe_ids) {
   # Filter for functional entity 
   df_sub <- df_spp %>% filter(fe_id == id)
@@ -111,7 +113,7 @@ for (id in fe_ids) {
   
   # Now iterate over the aphiaids (species) using trait_change function
     wrapped_r <- parallel::mclapply(aphiaid_sub, FUN = trait_change, df = df_sub, 
-                                    mc.cores = 3)
+                                    mc.cores = 10)
     
     # Unwrap rasters (they're wrapped for parallelization)
     spp_r <- lapply(wrapped_r, unwrap)
@@ -129,6 +131,7 @@ for (id in fe_ids) {
     # Return results
     all_results[[as.character(id)]] <- change_stack_trait_change
 }
+})
 ```
 
 ```{r}
@@ -171,23 +174,23 @@ count_change <- function(x, n){
 ```
 
 ```{r}
-# Took 6 min
+# Took 3 min
 system.time({
-  trait_same_count_pl <- app(trait_stack, count_change, n = 3, cores = 2)
+  trait_same_count_pl <- app(trait_stack, count_change, n = 3, cores = 10)
   })
 ```
 
 ```{r}
-# Took 6 min
+# Took 3 min
 system.time({
-  trait_inv_count_pl <- app(trait_stack, count_change, n = 2, cores = 2)
+  trait_inv_count_pl <- app(trait_stack, count_change, n = 2, cores = 10)
   })
 ```
 
 ```{r}
-# Took 6 min
+# Took 3 min
 system.time({
-  trait_ext_count_pl <- app(trait_stack, count_change, n = 1, cores = 2)
+  trait_ext_count_pl <- app(trait_stack, count_change, n = 1, cores = 10)
   })
 ```
 
@@ -197,6 +200,56 @@ trait_ssi_pl <- (2*trait_same_count_pl)/((2*trait_same_count_pl) + trait_ext_cou
 
 ```{r}
 plot(trait_ssi_pl)
+```
+```{r}
+writeRaster(trait_stack, 
+            filename = "/home/shares/usgs-cap-rangeshifts/data_aquax/outputs/trait_stack_sample_031826.tif")
+```
+
+
+```{r}
+writeRaster(trait_ext_count_pl, 
+            filename = "/home/shares/usgs-cap-rangeshifts/data_aquax/outputs/trait_ext_031826.tif")
+writeRaster(trait_inv_count_pl, 
+            filename = "/home/shares/usgs-cap-rangeshifts/data_aquax/outputs/trait_inv_031826.tif")
+writeRaster(trait_same_count_pl, 
+            filename = "/home/shares/usgs-cap-rangeshifts/data_aquax/outputs/trait_same_031826.tif")
+```
+
+```{r}
+writeRaster(trait_ssi_pl, 
+            filename = "/home/shares/usgs-cap-rangeshifts/data_aquax/outputs/trait_ssi_031826.tif")
+```
+
+
+```{r}
+trait_ssi_df <- as.data.frame(trait_ssi_pl, xy = TRUE)
+trait_h_df <- as.data.frame(trait_ext_count_pl + trait_same_count_pl, xy = TRUE)
+trait_f_df <- as.data.frame(trait_inv_count_pl + trait_same_count_pl, xy = TRUE)
+```
+
+```{r}
+ggplot() +
+  geom_raster(data = trait_h_df, aes(x = x, y = y, fill = lyr.1)) +
+  scale_fill_viridis_c(limits = c(0,100), direction = -1) +
+  labs(title = "AquaX Subsample: Historic Functional Entity Count", 
+       fill = "FE count")
+```
+
+```{r}
+ggplot() +
+  geom_raster(data = trait_f_df, aes(x = x, y = y, fill = lyr.1)) +
+  scale_fill_viridis_c(limits = c(0,100), direction = -1) +
+  labs(title = "AquaX Subsample: Future Functional Entity Count", 
+       fill = "FE count")
+```
+
+```{r}
+ggplot() +
+  geom_raster(data = trait_ssi_df, aes(x = x, y = y, fill = lyr.1)) +
+  scale_fill_viridis_c(limits = c(0,1), direction = -1) +
+  labs(title = "AquaX Subsample: 153 trait SSI (564 species)", 
+       fill = "SSI")
 ```
 
 
