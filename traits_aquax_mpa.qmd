@@ -1,0 +1,41 @@
+---
+title: "Traits and AquaX Sample - MPAs"
+format: 
+  html:
+    toc: true
+    number-sections: true
+    embed-resources: true
+execute:
+    message: false
+    warning: false
+---
+
+```{r}
+library(tidyverse)
+library(sf)
+library(terra)
+```
+
+```{r}
+# Check out the file database
+st_layers('/home/shares/usgs-cap-rangeshifts/data_wdpa_mpa_2026/WDPA_WDOECM_Mar2026_Public_marine.gdb')
+```
+
+```{r}
+# Focusing on polygons, not points
+mpa_gdb <- vect('/home/shares/usgs-cap-rangeshifts/data_wdpa_mpa_2026/WDPA_WDOECM_Mar2026_Public_marine.gdb',
+                   "WDPA_WDOECM_poly_Mar2026_marine")
+```
+
+```{r}
+# Create a blank raster matching AquaX resolution
+mpa_raster_blank <- rast(mpa_gdb, res = 0.05)
+```
+
+```{r}
+mpa_raster_output <- rasterize(mpa_gdb, mpa_raster_blank, field = "IUCN_CAT")
+```
+
+```{r}
+plot(mpa_raster_output)
+```
