@@ -16,8 +16,14 @@ library(sf)
 library(terra)
 ```
 
+# Read in SSI and MPA data
 ```{r}
-# Check out the file database
+# Species SSI (RCP 8.5, change to 2050)
+spp_ssi <- rast("/home/shares/usgs-cap-rangeshifts/data_aquax/outputs/spp_ssi_03.16.26.tif")
+```
+
+```{r}
+# Check out the MPA file database
 st_layers('/home/shares/usgs-cap-rangeshifts/data_wdpa_mpa_2026/WDPA_WDOECM_Mar2026_Public_marine.gdb')
 ```
 
@@ -28,14 +34,70 @@ mpa_gdb <- vect('/home/shares/usgs-cap-rangeshifts/data_wdpa_mpa_2026/WDPA_WDOEC
 ```
 
 ```{r}
-# Create a blank raster matching AquaX resolution
-mpa_raster_blank <- rast(mpa_gdb, res = 0.05)
+# Transform to SSI crs
+mpa_gdb_crs <- project(mpa_gdb, crs(spp_ssi))
 ```
 
 ```{r}
-mpa_raster_output <- rasterize(mpa_gdb, mpa_raster_blank, field = "IUCN_CAT")
+# Create a blank raster matching AquaX resolution
+mpa_raster_blank <- rast(xmin = -180,
+                  xmax = 180,
+                  ymin = -90, 
+                  ymax = 90,
+                  resolution = 0.05)
+```
+
+```{r}
+mpa_raster_output <- rasterize(mpa_gdb_crs, mpa_raster_blank, field = "IUCN_CAT")
 ```
 
 ```{r}
 plot(mpa_raster_output)
 ```
+
+## Bring in the AquaX data
+Bring in the AquaX processed data from traits_aquax_sample.qmd and traits_cont_aquax_sample.qmd scripts. Align with the various MPA IUCN categories spatially. Then, perhaps can move from spatial data to dataframe to calculate statistics of interest
+
+```{r}
+plot(spp_ssi)
+```
+```{r}
+# Re-project MPA crs to match SSI crs
+mpa_raster <- project(mpa_raster_output, crs(spp_ssi))
+```
+
+```{r}
+# Create a blank global raster with same resolution and crs; assign pixel ids
+id_raster <- rast(xmin = -180,
+                  xmax = 180,
+                  ymin = -90, 
+                  ymax = 90,
+                  resolution = 0.05, 
+                  crs = crs(spp_ssi))
+
+values(id_raster) <-  1:ncell(id_raster)
+names(id_raster) <- "pixel_id"
+```
+
+```{r}
+plot(id_raster)
+```
+
+```{r}
+# Extend SSI to full globe extent (id_raster and mpa already match extent)
+ssi_raster_ext <- extend(spp_ssi, ext(id_raster))
+```
+
+```{r}
+# Merge rasters
+mpa_ssi <- c(id_raster, mpa_raster_output, ssi_raster_ext)
+```
+
+```{r}
+plot(mpa_ssi)
+```
+```{r}
+# Find the mean species SSI in each IUCN category
+zonal(mpa_ssi$sum, mpa_ssi$IUCN_CAT, "mean")
+```
+
