@@ -16,6 +16,41 @@ library(sf)
 library(terra)
 ```
 
+# Read in global marine data from Marine Regions
+```{r}
+marine <- st_read('/home/shares/usgs-cap-rangeshifts/spatial/World_EEZ_v12_20231025_gpkg/eez_boundaries_v12.gpkg')
+```
+```{r}
+marine_aus <- marine %>% 
+  filter(TERRITORY1 == "Australia")
+```
+
+
+```{r}
+plot(marine_aus$geom)
+```
+
+```{r}
+eez <- st_read('/home/shares/usgs-cap-rangeshifts/spatial/World_EEZ_v12_20231025_gpkg/eez_v12.gpkg')
+```
+
+```{r}
+ggplot() +
+  geom_sf(data = eez, fill = "blue")
+```
+
+Have EEZ shapefile, but looking for country outlines for mask
+
+```{r}
+library(rnaturalearth)
+countries <- ne_download(scale = 10, type = "countries")
+```
+
+```{r}
+plot(countries$geometry)
+```
+
+
 # Read in SSI and MPA data
 ```{r}
 # Species SSI (RCP 8.5, change to 2050)
@@ -39,6 +74,29 @@ mpa_gdb_crs <- project(mpa_gdb, crs(spp_ssi))
 ```
 
 ```{r}
+# Filter for only "Designated" STATUS
+des <- which(mpa_gdb_crs$STATUS == 'Designated')
+mpa_gdb_crs_des <- mpa_gdb_crs[des,]
+```
+
+```{r}
+# Filter one set for no take area greater than or equal to 0.75 and one for categories
+ge_75 <- which(mpa_gdb_crs_des$NO_TK_AREA/mpa_gdb_crs_des$REP_M_AREA >= 0.75)
+mpa_des_75 <- mpa_gdb_crs_des[ge_75,]
+
+high_cat <- which(mpa_gdb_crs_des$IUCN_CAT %in% c("Ia", "Ib", "II"))
+mpa_des_cat <- mpa_gdb_crs_des[high_cat,]
+```
+
+```{r}
+# Maybe I could do both together - yes!
+ge_75_cat <- which(mpa_gdb_crs_des$IUCN_CAT %in% c("Ia", "Ib", "II") |
+                 mpa_gdb_crs_des$NO_TK_AREA/mpa_gdb_crs_des$REP_M_AREA >= 0.75)
+
+mpa_ge_75_cat <- mpa_gdb_crs_des[ge_75_cat,]
+```
+
+```{r}
 # Create a blank raster matching AquaX resolution
 mpa_raster_blank <- rast(xmin = -180,
                   xmax = 180,
@@ -54,6 +112,54 @@ mpa_raster_output <- rasterize(mpa_gdb_crs, mpa_raster_blank, field = "IUCN_CAT"
 ```{r}
 plot(mpa_raster_output)
 ```
+```{r}
+# Create a 10 factor finer blank raster
+mpa_raster_blank_005 <- rast(xmin = -180,
+                  xmax = 180,
+                  ymin = -90, 
+                  ymax = 90,
+                  resolution = 0.005)
+```
+
+```{r}
+mpa_filtered_raster_output <- rasterize(mpa_ge_75_cat, 
+                                        mpa_raster_blank_005, 
+                                        field = "IUCN_CAT")
+```
+
+```{r}
+plot(mpa_filtered_raster_output)
+```
+
+```{r}
+# Assign 1 to the filtered MPAs and 0 to non-MPA areas
+binary_mpa <- ifel(is.na(mpa_filtered_raster_output), 0, 1)
+```
+
+```{r}
+plot(binary_mpa)
+```
+## Mask land 
+
+```{r}
+# Algin CRS of countries
+countries_crs <- st_transform(countries, st_crs(spp_ssi))
+```
+
+```{r}
+# Rasterize countries
+countries_r <- rasterize(countries_crs, mpa_raster_blank_005, field = "SOVEREIGNT")
+```
+
+```{r}
+# Mask land on mpa (inverse = TRUE since keeping NA areas of land raster)
+mpa_binary_ocean <- mask(binary_mpa, countries_r, inverse = TRUE)
+```
+
+```{r}
+plot(mpa_binary_ocean)
+```
+
 
 ## Bring in the AquaX data
 Bring in the AquaX processed data from traits_aquax_sample.qmd and traits_cont_aquax_sample.qmd scripts. Align with the various MPA IUCN categories spatially. Then, perhaps can move from spatial data to dataframe to calculate statistics of interest
