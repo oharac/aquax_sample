@@ -74,27 +74,30 @@ mpa_gdb_crs <- project(mpa_gdb, crs(spp_ssi))
 ```
 
 ```{r}
-# Filter for only "Designated" STATUS
-des <- which(mpa_gdb_crs$STATUS == 'Designated')
-mpa_gdb_crs_des <- mpa_gdb_crs[des,]
+mpa_gdb_crs_sf <- st_as_sf(mpa_gdb_crs)
 ```
 
 ```{r}
-# Filter one set for no take area greater than or equal to 0.75 and one for categories
-ge_75 <- which(mpa_gdb_crs_des$NO_TK_AREA/mpa_gdb_crs_des$REP_M_AREA >= 0.75)
-mpa_des_75 <- mpa_gdb_crs_des[ge_75,]
-
-high_cat <- which(mpa_gdb_crs_des$IUCN_CAT %in% c("Ia", "Ib", "II"))
-mpa_des_cat <- mpa_gdb_crs_des[high_cat,]
+# Filter for Designated status and either no take area greater than or equal to 0.75, and for categories Ia, Ib, and II
+mpa_sf_des <- mpa_gdb_crs_sf %>% 
+  filter(STATUS == "Designated") %>% 
+  mutate(IUCN_CAT_NUM = case_when(IUCN_CAT == "Ia" ~ 0.5,
+                                  IUCN_CAT == "Ib" ~ 1,
+                                  IUCN_CAT == "II" ~ 2,
+                                  IUCN_CAT == "III" ~ 3,
+                                  IUCN_CAT == "IV" ~ 4,
+                                  IUCN_CAT == "V" ~ 5,
+                                  IUCN_CAT == "VI" ~ 6,
+                                  IUCN_CAT == "Not Reported" ~ 7,
+                                  IUCN_CAT == "Not Applicable" ~ 8,
+                                  IUCN_CAT == "Not Assinged" ~ 9)) %>% 
+  filter(IUCN_CAT %in% c("Ia", "Ib", "II") |NO_TK_AREA/REP_M_AREA >= 0.75)
 ```
 
 ```{r}
-# Maybe I could do both together - yes!
-ge_75_cat <- which(mpa_gdb_crs_des$IUCN_CAT %in% c("Ia", "Ib", "II") |
-                 mpa_gdb_crs_des$NO_TK_AREA/mpa_gdb_crs_des$REP_M_AREA >= 0.75)
-
-mpa_ge_75_cat <- mpa_gdb_crs_des[ge_75_cat,]
+plot(mpa_sf_des$geometry)
 ```
+
 
 ```{r}
 # Create a blank raster matching AquaX resolution
@@ -122,9 +125,10 @@ mpa_raster_blank_005 <- rast(xmin = -180,
 ```
 
 ```{r}
-mpa_filtered_raster_output <- rasterize(mpa_ge_75_cat, 
+mpa_filtered_raster_output <- rasterize(mpa_sf_des, 
                                         mpa_raster_blank_005, 
-                                        field = "IUCN_CAT")
+                                        field = "IUCN_CAT_NUM",
+                                        fun = "min")
 ```
 
 ```{r}
@@ -134,30 +138,60 @@ plot(mpa_filtered_raster_output)
 ```{r}
 # Assign 1 to the filtered MPAs and 0 to non-MPA areas
 binary_mpa <- ifel(is.na(mpa_filtered_raster_output), 0, 1)
+
+# Change name from IUCN_CAT to mpa_filter
+names(binary_mpa) <- "mpa_filter"
 ```
 
 ```{r}
 plot(binary_mpa)
 ```
 ## Mask land 
+Will use the marine regions global ocean and seas layer 
 
 ```{r}
-# Algin CRS of countries
-countries_crs <- st_transform(countries, st_crs(spp_ssi))
+oceans <- st_read('/home/shares/usgs-cap-rangeshifts/spatial/GOaS_v1_20211214_gpkg/goas_v01.gpkg')
 ```
 
 ```{r}
-# Rasterize countries
-countries_r <- rasterize(countries_crs, mpa_raster_blank_005, field = "SOVEREIGNT")
+# Align CRS of oceans
+oceans_crs <- st_transform(oceans, st_crs(spp_ssi))
 ```
 
 ```{r}
-# Mask land on mpa (inverse = TRUE since keeping NA areas of land raster)
-mpa_binary_ocean <- mask(binary_mpa, countries_r, inverse = TRUE)
+# Rasterize oceans
+oceans_r <- rasterize(oceans_crs, mpa_raster_blank_005, field = "name")
+```
+
+```{r}
+# Mask land on mpa
+mpa_binary_ocean <- mask(binary_mpa, oceans_r)
 ```
 
 ```{r}
 plot(mpa_binary_ocean)
+```
+## Aggregate MPA map up to 0.05 degrees
+Aggregate the 0.005 pixels up by a factor of 10, take the mean of MPA 0/1
+
+```{r}
+mpa_ocean_05 <- terra::aggregate(mpa_binary_ocean, fact = 10, fun = "mean", na.rm = TRUE)
+```
+
+```{r}
+plot(mpa_ocean_05)
+```
+
+```{r}
+summary(mpa_ocean_05$mpa_filter)
+```
+```{r}
+# Assign pixels greater or equal to 0.5 MPA to 1
+mpa_ocean_05_clean <- ifel(mpa_ocean_05$mpa_filter >= 0.5, 1, 0)
+```
+
+```{r}
+plot(mpa_ocean_05_clean)
 ```
 
 
@@ -166,10 +200,6 @@ Bring in the AquaX processed data from traits_aquax_sample.qmd and traits_cont_a
 
 ```{r}
 plot(spp_ssi)
-```
-```{r}
-# Re-project MPA crs to match SSI crs
-mpa_raster <- project(mpa_raster_output, crs(spp_ssi))
 ```
 
 ```{r}
@@ -193,20 +223,20 @@ plot(id_raster)
 # Extend SSI to full globe extent (id_raster and mpa already match extent)
 ssi_raster_ext <- extend(spp_ssi, ext(id_raster))
 # Fix name
-names(ssi_raster_ext) <- "spp_ssi"
+names(ssi_raster_ext) <- "ssi_spp"
 ```
 
 ```{r}
 # Merge rasters
-mpa_ssi <- c(id_raster, mpa_raster_output, ssi_raster_ext)
+mpa_ssi <- c(id_raster, mpa_ocean_05_clean, ssi_raster_ext)
 ```
 
 ```{r}
 plot(mpa_ssi)
 ```
 ```{r}
-# Find the mean species SSI in each IUCN category
-zonal(mpa_ssi$spp_ssi, mpa_ssi$IUCN_CAT, "mean")
+# Find the mean species SSI in each MPA and non-MPA areas
+zonal(mpa_ssi$ssi_spp, mpa_ssi$mpa_filter, "mean", na.rm = TRUE)
 ```
 ## Read in trait data
 
@@ -229,11 +259,7 @@ mpa_ssi_trait <- c(mpa_ssi, trait_raster_ext)
 
 ```{r}
 # Find the mean trait SSI in each IUCN category
-zonal(mpa_ssi_trait$ssi_trait, mpa_ssi_trait$IUCN_CAT, "mean")
-```
-```{r}
-# Pixel frequency of the IUCN categories
-freq(mpa_ssi$IUCN_CAT)
+zonal(mpa_ssi_trait$ssi_trait, mpa_ssi_trait$mpa_filter, "mean", na.rm = TRUE)
 ```
 
 ## Test out creating a dataframe 
@@ -242,36 +268,89 @@ freq(mpa_ssi$IUCN_CAT)
 mpa_ssi_trait_df <- as.data.frame(mpa_ssi_trait, xy = TRUE)
 ```
 
-Before I get to this point, I'm going to have to mask out the land areas for the SSI calculations, otherwise I won't be able to see the difference between land and non-MPA ocean
-
-For, now let's run a t-test comparing the SSI of categories Ia, Ib, & II to everything else
-
 ```{r}
-mpa_ssi_filter <- mpa_ssi_trait_df %>% 
-  dplyr::select(pixel_id, IUCN_CAT, spp_ssi, ssi_trait) %>% 
-  filter(IUCN_CAT %in% c("Ia", "Ib", "II", "III", "IV", "V", "VI"))
+# Drop the NA cells in mpa_filter (land areas)
+mpa_ssi_trait_df_ocean <- mpa_ssi_trait_df %>% 
+  filter(!is.na(mpa_filter))
 ```
 
 ```{r}
-mpa_ssi_cat <- mpa_ssi_filter %>% 
-  mutate(IUCN_CAT_LVL = case_when(IUCN_CAT %in% c("Ia", "Ib", "II") ~ "high",
-         TRUE ~ "low"))
-```
-
-```{r}
-# t test - species SSI
-t.test(spp_ssi ~ IUCN_CAT_LVL, data = mpa_ssi_cat)
+# t test - species SSI - inside mpa (1) vs outside mpa (0)
+t.test(ssi_spp ~ mpa_filter, data = mpa_ssi_trait_df_ocean)
 ```
 ```{r}
 # t test - trait SSI
-t.test(ssi_trait ~ IUCN_CAT_LVL, data = mpa_ssi_cat)
+t.test(ssi_trait ~ mpa_filter, data = mpa_ssi_trait_df_ocean)
 ```
 
 ```{r}
 ggplot() +
-  geom_density(data = mpa_ssi_cat, aes(x = spp_ssi), fill = "darkgreen", alpha = 0.3) +
-  geom_density(data = mpa_ssi_cat, aes(x = ssi_trait), fill = "gray30", alpha = 0.3) +
-  facet_wrap(~IUCN_CAT_LVL) +
-  labs(x = "SSI")
+  geom_raster(data = mpa_ssi_trait_df_ocean %>% filter(mpa_filter == 0),
+              aes(x = x, y = y), fill = "grey50") +
+  geom_raster(data = mpa_ssi_trait_df_ocean %>% filter(mpa_filter == 1),
+              aes(x = x, y = y, fill = ssi_spp)) + 
+  scale_fill_viridis_c(limits = c(0,1), direction = -1) +
+  labs(title = "AquaX Subsample: species SSI in MPAs", 
+       fill = "SSI")
 ```
 
+```{r}
+ggplot() +
+  geom_raster(data = mpa_ssi_trait_df_ocean %>% filter(mpa_filter == 1),
+              aes(x = x, y = y), fill = "grey50") +
+  geom_raster(data = mpa_ssi_trait_df_ocean %>% filter(mpa_filter == 0),
+              aes(x = x, y = y, fill = ssi_spp)) + 
+  scale_fill_viridis_c(limits = c(0,1), direction = -1) +
+  labs(title = "AquaX Subsample: species SSI in non-MPAs", 
+       fill = "SSI")
+```
+
+
+
+
+
+
+
+################ OLD CODE
+
+```{r}
+# Filter for only "Designated" STATUS
+des <- which(mpa_gdb_crs$STATUS == 'Designated')
+mpa_gdb_crs_des <- mpa_gdb_crs[des,]
+```
+
+```{r}
+# Filter one set for no take area greater than or equal to 0.75 and one for categories
+ge_75 <- which(mpa_gdb_crs_des$NO_TK_AREA/mpa_gdb_crs_des$REP_M_AREA >= 0.75)
+mpa_des_75 <- mpa_gdb_crs_des[ge_75,]
+
+high_cat <- which(mpa_gdb_crs_des$IUCN_CAT %in% c("Ia", "Ib", "II"))
+mpa_des_cat <- mpa_gdb_crs_des[high_cat,]
+```
+
+```{r}
+# Maybe I could do both together - yes!
+ge_75_cat <- which(mpa_gdb_crs_des$IUCN_CAT %in% c("Ia", "Ib", "II") |
+                 mpa_gdb_crs_des$NO_TK_AREA/mpa_gdb_crs_des$REP_M_AREA >= 0.75)
+
+mpa_ge_75_cat <- mpa_gdb_crs_des[ge_75_cat,]
+```
+
+```{r}
+# Align CRS of countries
+countries_crs <- st_transform(countries, st_crs(spp_ssi))
+```
+
+```{r}
+# Rasterize countries
+countries_r <- rasterize(countries_crs, mpa_raster_blank_005, field = "SOVEREIGNT")
+```
+
+```{r}
+# Mask land on mpa (inverse = TRUE since keeping NA areas of land raster)
+mpa_binary_ocean <- mask(binary_mpa, countries_r, inverse = TRUE)
+```
+
+```{r}
+plot(mpa_binary_ocean)
+```
