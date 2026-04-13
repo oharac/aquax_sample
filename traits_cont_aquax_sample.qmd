@@ -75,10 +75,10 @@ trait_change <- function(id, df) {
   spp_change <- FINALEMMEAN %>% 
   mutate(aphiaid = id) %>% 
   select(x, y, aphiaid, Current, RCP85_2050, cutoff) %>% 
-  mutate(historical = case_when(Current < cutoff ~ 0,
-                                TRUE ~ 1),
-         future = case_when(RCP85_2050 < cutoff ~ 0,
-                             TRUE ~ 1)) #%>%
+  mutate(historical = case_when(Current < cutoff ~ 0, 
+                                Current >= cutoff ~ 1),
+         future = case_when(RCP85_2050 < cutoff ~ 0, 
+                            RCP85_2050 >= cutoff ~ 1)) #%>%
   # historical column plus 2 * future gives 0 = absence, 1 = extinction, 2 = invasion, 3 = presence
   #mutate(pxl_change = historical + 2 * future)
   
@@ -165,7 +165,7 @@ trait_stack <- rast(trait_rast_aligned)
 ```
 
 ## Now need to count up the numbers 
-The count of 0s, 1s, 2s, and 3s can be exploiting to figure out historic and future presence of the trait: 0 = absence, 1 = extinction, 2 = invasion, 3 = presence
+The count of 0s, 1s, 2s, and 3s can be exploited to figure out historic and future presence of the trait: 0 = absence, 1 = extinction, 2 = invasion, 3 = presence
 
 ```{r}
 count_change <- function(x, n){
@@ -206,19 +206,30 @@ writeRaster(trait_stack,
             filename = "/home/shares/usgs-cap-rangeshifts/data_aquax/outputs/trait_stack_sample_031826.tif")
 ```
 
+```{r}
+#change names
+names(trait_same_count_pl) <- "t_same_count"
+names(trait_ext_count_pl) <- "t_ext_count"
+names(trait_inv_count_pl) <- "t_inv_count"
+
+# Merge rasters
+trait_s_h_f <- c(trait_same_count_pl, trait_ext_count_pl, trait_inv_count_pl)
+```
+
+# Save updated rasters
 
 ```{r}
 writeRaster(trait_ext_count_pl, 
-            filename = "/home/shares/usgs-cap-rangeshifts/data_aquax/outputs/trait_ext_031826.tif")
+            filename = "/home/shares/usgs-cap-rangeshifts/data_aquax/outputs/trait_ext_041326.tif")
 writeRaster(trait_inv_count_pl, 
-            filename = "/home/shares/usgs-cap-rangeshifts/data_aquax/outputs/trait_inv_031826.tif")
+            filename = "/home/shares/usgs-cap-rangeshifts/data_aquax/outputs/trait_inv_041326.tif")
 writeRaster(trait_same_count_pl, 
-            filename = "/home/shares/usgs-cap-rangeshifts/data_aquax/outputs/trait_same_031826.tif")
+            filename = "/home/shares/usgs-cap-rangeshifts/data_aquax/outputs/trait_same_041326.tif")
 ```
 
 ```{r}
 writeRaster(trait_ssi_pl, 
-            filename = "/home/shares/usgs-cap-rangeshifts/data_aquax/outputs/trait_ssi_031826.tif")
+            filename = "/home/shares/usgs-cap-rangeshifts/data_aquax/outputs/trait_ssi_041326.tif")
 ```
 
 
@@ -226,6 +237,18 @@ writeRaster(trait_ssi_pl,
 trait_ssi_df <- as.data.frame(trait_ssi_pl, xy = TRUE)
 trait_h_df <- as.data.frame(trait_ext_count_pl + trait_same_count_pl, xy = TRUE)
 trait_f_df <- as.data.frame(trait_inv_count_pl + trait_same_count_pl, xy = TRUE)
+```
+
+```{r}
+trait_s_h_f_df <- as.data.frame(trait_s_h_f, xy = TRUE)
+```
+
+```{r}
+# Same number as the ssi calculated raster - so shouldn't have to worry about pixels with 0 future and 0 historic species for 0 ssi
+t_ssi_no0 <- trait_s_h_f_df %>% 
+  mutate(s_h_f_sum = t_same_count + t_ext_count + t_inv_count) %>% 
+  filter(s_h_f_sum != 0) %>% 
+  mutate(t_ssi = 2*same_count/(2*same_count + ext_count + inv_count))
 ```
 
 ```{r}
