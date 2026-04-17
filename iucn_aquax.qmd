@@ -1,0 +1,80 @@
+---
+title: "AquaX and IUCN status"
+format: 
+  html:
+    toc: true
+    number-sections: true
+    embed-resources: true
+execute:
+    message: false
+    warning: false
+---
+
+```{r}
+library(tidyverse)
+library(here)
+library(iucnredlist) ### remotes::install_github("IUCN-UK/iucnredlist")
+library(janitor)
+```
+
+This document finds the IUCN threat information for the AquaX species
+
+```{r}
+aquax_iucn <- read_csv("data/2024_ohara_iucn_to_worms_match.csv")
+```
+
+```{r}
+api_key <- Sys.getenv("IUCN_API_KEY") ### usethis::edit_r_environ() to add key to R environment file
+api <- init_api(api_key)
+```
+
+```{r}
+# Get sample
+aquax_iucn_30 <- aquax_iucn[1:30,]
+```
+
+```{r}
+iucn_id <- function(api, sis_id){
+  # get species info
+  species_info <- #if (FALSE) # don't run
+    {assessments_by_sis_id(api,sis_id)}
+  list_status <- species_info %>%
+    filter(latest == TRUE & scopes_code == 1) #%>%
+  #filter(year_published == max(year_published))
+  return(list_status$assessment_id)
+}
+```
+
+```{r}
+# Pull iucn_sid
+iucn_sid_30 <- aquax_iucn_30$iucn_sid
+iucn_sid <- aquax_iucn$iucn_sid
+```
+
+```{r}
+sample <- assessments_by_sis_id(api, 235)
+sample_short <- assessments_by_sis_id(api, 229)
+```
+
+```{r}
+# Replace incorrect ids (most of these are referencing a subspecies - updated to full species id)
+# Replace 21861 id with 21856 (repeated so do twice)
+iucn_sid[410] <- 21856
+iucn_sid[411] <- 21856
+iucn_sid[486] <- 3853
+iucn_sid[683] <- 41745
+iucn_sid[4015] <- 42838
+```
+
+```{r}
+# Loop through function, save as list
+iucn_id_list <- list()
+for(i in 1:nrow(aquax_iucn)){
+  test <- iucn_id(api, iucn_sid[i])
+  iucn_id_list[[i]] <- test
+}
+```
+
+
+
+
